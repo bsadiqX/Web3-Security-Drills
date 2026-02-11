@@ -1,0 +1,24 @@
+# Environment variables
+.env
+**/.env
+
+# Build artifacts
+cache/
+out/
+**/cache/
+**/out/
+
+# Dependencies
+lib/
+**/lib/
+
+# Personal files
+goal.sol
+
+# IDE
+.vscode/
+.idea/
+.DS_Store
+
+# Node (if using)
+node_modules/
