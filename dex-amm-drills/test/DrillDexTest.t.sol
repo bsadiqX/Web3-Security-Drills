@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+pragma solidity ^0.8.30;
 
-import "forge-std/Test.sol";
-import "/../src/DrillDex.sol";
+import "../../lib/forge-std/src/Test.sol";
+import "../src/101-CreatePairV2.sol";
 
 /// @notice Mock ERC20 token used for DEX drills
 contract MockERC20 {
