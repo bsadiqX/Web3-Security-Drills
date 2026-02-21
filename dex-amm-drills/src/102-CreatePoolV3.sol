@@ -1,23 +1,15 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
+import "../lib/v3-core/contracts/UniswapV3Pool.sol";
+import "../lib/v3-core/contracts/UniswapV3PoolDeployer.sol";
+import '../lib/v3-core/contracts/NoDelegateCall.sol';
 /**
- * @title DEX / AMM Security Drill
- * @author bsadiq
- *
- * This contract is NOT intended to be a production-ready DEX.
- * It exists as a controlled research environment for analyzing how
- * AMM-based protocols are designed, structured, and secured.
- * 
- * All implementations are written from first principles after studying
- * publicly available protocol designs and documentation.
- *
- * This contract is intended for security research, reverse engineering,
- * and deep protocol analysis — not deployment.
+ * @notice This contract demonstrates step-by-step how a Uniswap V3 pool is created.
+ *         Designed for educational purposes, similar to a CreatePairV2.
  */
 
-contract DrillDexFactoryV3{
-    address public owner;
+contract FactoryV3 is UniswapV3PoolDeployer, NoDelegateCall{
 
     /*//////////////////////////////////////////////////////////////
                                 ERRORS
@@ -31,16 +23,32 @@ contract DrillDexFactoryV3{
                               STORAGE
     //////////////////////////////////////////////////////////////*/
 
+    address public owner;
     mapping(address => mapping(address => mapping(uint24 => address))) public getPool;
+    mapping(uint24 => int24) public feeAmountTickSpacing; // tick spacing per fee tier
+
+    /*//////////////////////////////////////////////////////////////
+                              CONSTRUCTOR
+    //////////////////////////////////////////////////////////////*/
+
+    constructor() {
+        owner = msg.sender;
+
+        // Standard V3 fee tiers and their tick spacing
+        feeAmountTickSpacing[500] = 10;      // 0.05%
+        feeAmountTickSpacing[3000] = 60;     // 0.3%
+        feeAmountTickSpacing[10000] = 200;   // 1%
+    }
 
     /*//////////////////////////////////////////////////////////////
                         POOL CREATION LOGIC -V3
     //////////////////////////////////////////////////////////////*/
 
-    function createPoolV3(address tokenA, address tokenB, uint fee) external {
-        // Identification as in createPair
+    function createPoolV3(address tokenA, address tokenB, uint24 fee) external noDelegateCall returns (address pool) {
+
+        // Prevents identical token addresses.
         if (tokenA == tokenB) revert IdenticalAddresses();
-        // Sorting as in createPair
+        // Sort token addresses.
         (address token0, address token1) =
             tokenA < tokenB ? (tokenA, tokenB) : (tokenB, tokenA);
         // Zero address check!
@@ -56,15 +64,11 @@ contract DrillDexFactoryV3{
         *
         * --- Uniswap V2 Pattern ---
         *
-        * - Pair constructor takes NO arguments.
-        * - token0 and token1 are later set via an external initialize() function.
+        * - The pair contract constructor takes NO arguments.
+        * - token0 and token1 are later set via an external `initialize()` function.
         * - Tokens are stored in regular storage variables.
-        *
-        * This allows CREATE2 deployment with constant creation bytecode,
-        * because constructor arguments are not embedded in the init code.
-        *
-        * However, reading storage variables costs more gas than reading immutables.
-        *
+        * - CREATE2 deployment can only be deterministic if the init code is constant,
+        *   which is easy here since no constructor args are embedded.
         *
         * --- Uniswap V3 Pattern ---
         *
@@ -125,170 +129,96 @@ contract DrillDexFactoryV3{
        getPool[token1][token0][fee] = pool;
        emit PoolCreated(token0, token1, fee, tickSpacing, pool);
     }
-    constructor() {
-        owner = msg.sender;
 
-        feeAmountTickSpacing[500] = 10;
-        feeAmountTickSpacing[3000] = 60;
-        feeAmountTickSpacing[10000] = 200;
-    }
-}
-
-    /*//////////////////////////////////////////////////////////////
-                            DEPLOY POOL LOGIC -V3
-    //////////////////////////////////////////////////////////////*/
-    contract DrillDexPoolDeployerV3{
-
-    Parameters public parameters;
-
-    struct Parameters{
-        address factory;
-        address token0;
-        address token1;
-        uint24 fee;
-        int24 tickSpacing;
-    }
-    function deploy(
-        address factory,
-        address token0,
-        address token1,
-        uint24 fee,
-        int24 tickSpacing
-    ) internal returns (address pool) {
-        parameters = Parameters({factory: factory, token0: token0, token1: token1, fee: fee, tickSpacing: tickSpacing});
-        pool = address(new DrillDexPoolV3{salt: keccak256(abi.encode(token0, token1, fee))}());
-        delete parameters;
-    }
-}
-
-    /*//////////////////////////////////////////////////////////////
-                        POOL CONTRACT -V3
-    //////////////////////////////////////////////////////////////*/
-
-    contract DrillDexPoolV3{
-    address public immutable factory;
-    address public immutable token0;
-    address public immutable token1;
-    uint24 public immutable fee;
-    int24 public immutable tickSpacing;
-    uint128 public immutable maxLiquidityPerTick;
-
-    constructor() {
-         int24 _tickSpacing;
-         (factory, token0, token1, fee, _tickSpacing) = DrillDexPoolDeployerV3(msg.sender).parameters();
-         tickSpacing = _tickSpacing;
-
-         maxLiquidityPerTick = Tick.tickSpacingToMaxLiquidityPerTick(_tickSpacing);
-    }
-
-
-    /// @notice Initializes the pool with a starting price.
-    /// @dev
-    /// =============================
-    /// WHY INITIALIZATION EXISTS
-    /// =============================
-    /// In Uniswap V3, deployment and price initialization are separated.
-    ///
-    /// DIFFERENCE FROM UNISWAP V2:
-    /// - Uniswap V2 also has an `initialize()` function,
-    ///   but V2's initialize() only sets token0 and token1.
-    /// - In V2, price is NOT initialized here.
-    /// - Price in V2 is implicitly defined later by the first liquidity deposit
-    ///   via the ratio of token0/token1 provided.
-    ///
-    /// In contrast:
-    /// - V3 requires price to be explicitly initialized BEFORE liquidity can be added.
-    ///
-    /// WHY V3 REQUIRES EXPLICIT PRICE:
-    /// - V3 uses concentrated liquidity.
-    /// - Liquidity exists within discrete tick ranges.
-    /// - Active liquidity depends on knowing the current tick.
-    /// - Therefore, a starting price must be defined first.
-    ///
-    /// This function can only be called once.
-    ///
-    /// WHY:
-    /// - Reinitializing would corrupt:
-    ///     • current tick
-    ///     • oracle accumulators
-    ///     • liquidity accounting
-    ///
-    /// @param sqrtPriceX96 The initial sqrt(token1/token0) price as Q64.96.
-    /// Example:
-    ///     If price = 2000,
-    ///     sqrtPriceX96 = sqrt(2000) * 2^96.
-    ///
-    /// REQUIREMENTS:
-    /// - Pool must not already be initialized.
-    /// - sqrtPriceX96 must be within TickMath bounds.
-    function initialize(uint160 sqrtPriceX96) external override {
-
-    /// @dev Prevents re-initialization.
-    ///
-    /// DIFFERENCE FROM V2:
-    /// - V2 initialize() only sets token addresses, thus it checks only whether they exists.
-    /// - V2 economic state (reserves, price) is established later
-    ///   during the first liquidity mint.
-    ///
-    /// In V3, economic state begins here.
-    require(slot0.sqrtPriceX96 == 0, 'AI');
-
-    /// @dev Converts continuous sqrt price into discrete tick.
-    ///
-    /// DIFFERENCE FROM V2:
-    /// - V2 does not use ticks or logarithmic price representation.
-    /// - V2 price is derived directly from reserves.
-    ///
-    /// V3 requires ticks because:
-    /// - Liquidity is distributed across discrete price intervals.
-    /// - Swap logic operates by crossing ticks.
-    ///
-    /// We derive tick internally to ensure:
-    /// - sqrtPrice and tick remain mathematically consistent.
-    /// - Caller cannot provide inconsistent values.
-    int24 tick = TickMath.getTickAtSqrtRatio(sqrtPriceX96);
-
-    /// @dev Initializes oracle observation storage.
-    ///
-    /// DIFFERENCE FROM V2:
-    /// - V2 stores cumulative price variables directly in the pair contract.
-    /// - V3 uses a ring buffer of observations with configurable cardinality.
-    ///
-    /// Oracle storage must be initialized before swaps occur.
-    (uint16 cardinality, uint16 cardinalityNext) =
-        observations.initialize(_blockTimestamp());
-
-    /// @dev Writes all core state variables into slot0.
-    ///
-    /// DIFFERENCE FROM V2:
-    /// - V2 core state is reserve-based.
-    /// - V3 core state is price-and-tick based.
-    ///
-    /// V3 stores sqrtPrice directly because liquidity is virtual
-    /// and range-based rather than uniformly distributed.
-    ///
-    /// unlocked:
-    /// - Enables the reentrancy guard for future operations.
-    /// - No lock needed during initialize because:
-    ///     • No token transfers occur
-    ///     • No external calls occur
-    ///     • No liquidity exists yet
-    slot0 = Slot0({
-        sqrtPriceX96: sqrtPriceX96,
-        tick: tick,
-        observationIndex: 0,
-        observationCardinality: cardinality,
-        observationCardinalityNext: cardinalityNext,
-        feeProtocol: 0,
-        unlocked: true
-    });
-
-    /// @dev Emitted once for indexers.
-    ///
-    /// DIFFERENCE FROM V2:
-    /// - V2 emits events when liquidity is first minted.
-    /// - V3 emits Initialize before any liquidity exists,
-    ///   because price must exist before liquidity.
-    emit Initialize(sqrtPriceX96, tick);
-    }
-}
+    /*
+    * =============================
+    * NOTE:
+    * =============================
+    * In Uniswap V3, deployment and price initialization are separated.
+    *
+    * DIFFERENCE FROM UNISWAP V2:
+    * - Uniswap V2 also has an `initialize()` function,
+    *   but V2's initialize() only sets token0 and token1.
+    * - In V2, price is NOT initialized here.
+    * - Price in V2 is implicitly defined later by the first liquidity deposit
+    *   via the ratio of token0/token1 provided.
+    *
+    * In contrast:
+    * - V3 requires price to be explicitly initialized BEFORE liquidity can be added.
+    *
+    * WHY V3 REQUIRES EXPLICIT PRICE:
+    * - V3 uses concentrated liquidity.
+    * - Liquidity exists within discrete tick ranges.
+    * - Active liquidity depends on knowing the current tick.
+    * - Therefore, a starting price must be defined first.
+    *
+    * param sqrtPriceX96 The initial sqrt(token1/token0) price as Q64.96.
+    * Example:
+    *     If price = 2000,
+    *     sqrtPriceX96 = sqrt(2000) * 2^96.
+    *
+    * REQUIREMENTS:
+    * - Pool must not already be initialized.
+    * - sqrtPriceX96 must be within TickMath bounds.
+    * 
+    * // function initialize(uint160 sqrtPriceX96) external {
+    *
+    * DIFFERENCE FROM V2:
+    * - V2 initialize() only sets token addresses, thus it checks only whether they exists.
+    * - V2 economic state (reserves, price) is established later
+    *   during the first liquidity mint.
+    *
+    * In V3, economic state begins here.
+    * 
+    * // require(slot0.sqrtPriceX96 == 0, 'AI');
+    *
+    * Converts continuous sqrt price into discrete tick.
+    *
+    * DIFFERENCE FROM V2:
+    * - V2 does not use ticks or logarithmic price representation.
+    * - V2 price is derived directly from reserves.
+    *
+    * V3 requires ticks because:
+    * - Liquidity is distributed across discrete price intervals.
+    * - Swap logic operates by crossing ticks.
+    *
+    * We derive tick internally to ensure:
+    * - sqrtPrice and tick remain mathematically consistent.
+    * - Caller cannot provide inconsistent values.
+    * // int24 tick = TickMath.getTickAtSqrtRatio(sqrtPriceX96);
+    *
+    * Initializes oracle observation storage.
+    *
+    * DIFFERENCE FROM V2:
+    * - V2 stores cumulative price variables directly in the pair contract.
+    * - V3 uses a ring buffer of observations with configurable cardinality.
+    *
+    * Oracle storage must be initialized before swaps occur.
+    * // (uint16 cardinality, uint16 cardinalityNext) =
+    * // observations.initialize(_blockTimestamp());
+    *
+    * Writes all core state variables into slot0.
+    *
+    * DIFFERENCE FROM V2:
+    * - V2 core state is reserve-based.
+    * - V3 core state is price-and-tick based.
+    *
+    * V3 stores sqrtPrice directly because liquidity is virtual
+    * and range-based rather than uniformly distributed.
+    *
+    * unlocked:
+    * - Enables the reentrancy guard for future operations.
+    * - No lock needed during initialize because:
+    *     • No token transfers occur
+    *     • No external calls occur
+    *     • No liquidity exists yet
+    * // slot0 = Slot0({
+    * // sqrtPriceX96: sqrtPriceX96,
+    * // tick: tick,
+    * // observationIndex: 0,
+    * // observationCardinality: cardinality,
+    * // observationCardinalityNext: cardinalityNext,
+    * // feeProtocol: 0,
+    * // unlocked: true
+    * // });
+    */
