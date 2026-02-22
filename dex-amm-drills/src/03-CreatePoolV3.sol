@@ -15,9 +15,19 @@ contract FactoryV3 is UniswapV3PoolDeployer, NoDelegateCall{
                                 ERRORS
     //////////////////////////////////////////////////////////////*/
 
-    error IdenticalAddresses();
-    error ZeroAddress();
-    error PoolAlreadyExists();
+    // Custom Errors Do NOT Exist In Solidity 0.7.6
+
+     /*//////////////////////////////////////////////////////////////
+                                EVENTS
+    //////////////////////////////////////////////////////////////*/
+
+    event PoolCreated(
+    address indexed token0,
+    address indexed token1,
+    uint24 fee,
+    int24 tickSpacing,
+    address pool
+    );
 
     /*//////////////////////////////////////////////////////////////
                               STORAGE
@@ -47,15 +57,17 @@ contract FactoryV3 is UniswapV3PoolDeployer, NoDelegateCall{
     function createPoolV3(address tokenA, address tokenB, uint24 fee) external noDelegateCall returns (address pool) {
 
         // Prevents identical token addresses.
-        if (tokenA == tokenB) revert IdenticalAddresses();
+        require(tokenA != tokenB);
         // Sort token addresses.
         (address token0, address token1) =
             tokenA < tokenB ? (tokenA, tokenB) : (tokenB, tokenA);
         // Zero address check!
-        if (token0 == address(0)) revert ZeroAddress();
+        require(token0 != address(0));
+        // Check that fee tier is enabled and has a valid tick spacing.
+        int24 tickSpacing = feeAmountTickSpacing[fee];
+        require(tickSpacing != 0);
         // Pool existance check!
-        if (getPool[token0][token1][fee] != address(0))
-            revert PoolAlreadyExists();
+        require(getPool[token0][token1][fee] == address(0));
         /**
         * @notice Explains why Uniswap V3 uses a separate PoolDeployer contract
         *         instead of directly deploying pools with constructor arguments.
@@ -222,3 +234,4 @@ contract FactoryV3 is UniswapV3PoolDeployer, NoDelegateCall{
     * // unlocked: true
     * // });
     */
+}

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
-import "../../lib/forge-std/src/Test.sol";
-import "../src/101-CreatePairV2.sol";
+import "../lib/forge-std/src/Test.sol";
+import "../src/02-CreatePairV2.sol";
 
 /// @notice Mock ERC20 token used for DEX drills
 contract MockERC20 {
@@ -16,9 +16,9 @@ contract MockERC20 {
     }
 }
 
-/// @notice Security drill tests for DrillDexFactory / DrillDexPair
-contract DrillDexFactoryTest is Test {
-    DrillDexFactory factory;
+/// @notice Security drill tests for how create pair works in V2
+contract CreatePairV2Test is Test {
+    CreatePairV2 factory;
 
     address tokenA;
     address tokenB;
@@ -159,7 +159,7 @@ contract DrillDexFactoryTest is Test {
     }
 
     /*//////////////////////////////////////////////////////////////
-                🔥 INTENTIONAL VULNERABILITY TEST
+                 INTENTIONAL VULNERABILITY TEST
     //////////////////////////////////////////////////////////////*/
 
     /// @notice Demonstrates what happens if initialization is not restricted

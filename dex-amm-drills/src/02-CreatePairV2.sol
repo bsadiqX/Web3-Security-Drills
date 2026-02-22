@@ -16,7 +16,7 @@ pragma solidity ^0.8.30;
  * and deep protocol analysis — not deployment.
  */
 
-contract DrillDexFactory {
+contract CreatePairV2 {
 
     /*//////////////////////////////////////////////////////////////
                                 ERRORS
